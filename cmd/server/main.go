@@ -58,8 +58,6 @@ func handle(
 	}
 	defer targetConn.Close()
 
-	done := make(chan struct{}, 2)
-	go okcptun.Pipe(clientConn, targetConn, done)
-	go okcptun.Pipe(targetConn, clientConn, done)
-	<-done
+	go okcptun.UnwrapFrames(targetConn, clientConn)
+	okcptun.WrapFrames(clientConn, targetConn)
 }

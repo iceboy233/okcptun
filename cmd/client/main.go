@@ -58,8 +58,6 @@ func handle(clientConn net.Conn, mux *okcptun.KCPMux, remoteAddr *net.UDPAddr) {
 	defer closer.Close()
 	defer remoteConn.Close()
 
-	done := make(chan struct{}, 2)
-	go okcptun.Pipe(clientConn, remoteConn, done)
-	go okcptun.Pipe(remoteConn, clientConn, done)
-	<-done
+	go okcptun.UnwrapFrames(clientConn, remoteConn)
+	okcptun.WrapFrames(remoteConn, clientConn)
 }
