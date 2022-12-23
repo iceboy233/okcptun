@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"okcptun"
-	"sync"
 
 	"github.com/xtaci/kcp-go/v5"
 )
@@ -14,9 +13,12 @@ import (
 var (
 	flagLocalAddr  = flag.String("localAddr", "127.0.0.1:10000", "")
 	flagTargetAddr = flag.String("targetAddr", "127.0.0.1:10000", "")
+	flagPassword   = flag.String("password", "", "")
 )
 
 func main() {
+	flag.Parse()
+
 	localAddr, err := net.ResolveUDPAddr("udp", *flagLocalAddr)
 	if err != nil {
 		log.Fatal("main: ResolveUDPAddr failed: ", err)
@@ -30,43 +32,34 @@ func main() {
 		log.Fatal("main: ListenUDP failed: ", err)
 	}
 	log.Print("main: Listening on ", conn.LocalAddr())
-	mux := okcptun.NewKCPMux(conn)
+	mux, err := okcptun.NewKCPMux(conn, *flagPassword)
+	if err != nil {
+		log.Fatal("main: NewCipher failed: ", err)
+	}
 	for {
-		clientConn, err := mux.Accept()
+		clientConn, closer, err := mux.Accept()
 		if err != nil {
 			log.Fatal("main: Accept failed: ", err)
 		}
-		go handle(clientConn, targetAddr)
+		go handle(clientConn, closer, targetAddr)
 	}
 }
 
-func handle(clientConn *kcp.UDPSession, targetAddr *net.TCPAddr) {
+func handle(
+	clientConn *kcp.UDPSession, closer io.Closer, targetAddr *net.TCPAddr) {
+	defer closer.Close()
+	defer clientConn.Close()
+
 	log.Print("handle: new connection from ", clientConn.RemoteAddr())
 	targetConn, err := net.DialTCP("tcp", nil, targetAddr)
 	if err != nil {
 		log.Print("handle: DialTCP failed: ", err)
 		return
 	}
-	wg := &sync.WaitGroup{}
-	wg.Add(2)
-	go pipe(clientConn, targetConn, wg)
-	go pipe(targetConn, clientConn, wg)
-	wg.Wait()
-}
+	defer targetConn.Close()
 
-func pipe(reader io.ReadCloser, writer io.WriteCloser, wg *sync.WaitGroup) {
-	defer reader.Close()
-	defer writer.Close()
-
-	buffer := [8192]byte{}
-	for {
-		size, err := reader.Read(buffer[:])
-		if err != nil {
-			return
-		}
-		_, err = writer.Write(buffer[:size])
-		if err != nil {
-			return
-		}
-	}
+	done := make(chan struct{}, 2)
+	go okcptun.Pipe(clientConn, targetConn, done)
+	go okcptun.Pipe(targetConn, clientConn, done)
+	<-done
 }

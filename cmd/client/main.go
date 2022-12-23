@@ -2,19 +2,20 @@ package main
 
 import (
 	"flag"
-	"io"
 	"log"
 	"net"
 	"okcptun"
-	"sync"
 )
 
 var (
 	flagLocalAddr  = flag.String("localAddr", "127.0.0.1:10000", "")
 	flagRemoteAddr = flag.String("remoteAddr", "127.0.0.1:10000", "")
+	flagPassword   = flag.String("password", "", "")
 )
 
 func main() {
+	flag.Parse()
+
 	localAddr, err := net.ResolveTCPAddr("tcp", *flagLocalAddr)
 	if err != nil {
 		log.Fatal("main: ResolveTCPAddr failed: ", err)
@@ -32,7 +33,10 @@ func main() {
 	if err != nil {
 		log.Fatal("main: ListenUDP failed: ", err)
 	}
-	mux := okcptun.NewKCPMux(conn)
+	mux, err := okcptun.NewKCPMux(conn, *flagPassword)
+	if err != nil {
+		log.Fatal("main: NewCipher failed: ", err)
+	}
 	for {
 		clientConn, err := listener.AcceptTCP()
 		if err != nil {
@@ -43,32 +47,19 @@ func main() {
 }
 
 func handle(clientConn net.Conn, mux *okcptun.KCPMux, remoteAddr *net.UDPAddr) {
+	defer clientConn.Close()
+
 	log.Print("handle: new connection from ", clientConn.RemoteAddr())
-	remoteConn, err := mux.Dial(remoteAddr)
+	remoteConn, closer, err := mux.Dial(remoteAddr)
 	if err != nil {
 		log.Print("handle: Dial failed: ", err)
 		return
 	}
-	wg := &sync.WaitGroup{}
-	wg.Add(2)
-	go pipe(clientConn, remoteConn, wg)
-	go pipe(remoteConn, clientConn, wg)
-	wg.Wait()
-}
+	defer closer.Close()
+	defer remoteConn.Close()
 
-func pipe(reader io.ReadCloser, writer io.WriteCloser, wg *sync.WaitGroup) {
-	defer reader.Close()
-	defer writer.Close()
-
-	buffer := [8192]byte{}
-	for {
-		size, err := reader.Read(buffer[:])
-		if err != nil {
-			return
-		}
-		_, err = writer.Write(buffer[:size])
-		if err != nil {
-			return
-		}
-	}
+	done := make(chan struct{}, 2)
+	go okcptun.Pipe(clientConn, remoteConn, done)
+	go okcptun.Pipe(remoteConn, clientConn, done)
+	<-done
 }

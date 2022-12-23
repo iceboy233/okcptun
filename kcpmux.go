@@ -1,19 +1,27 @@
 package okcptun
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"flag"
+	"io"
 	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/xtaci/kcp-go/v5"
+	"github.com/zeebo/blake3"
 )
 
 type KCPMux struct {
 	baseConn net.PacketConn
+	key      [32]byte
+	cipher   cipher.Block
 	conns    map[uint32]*KCPMuxConn
 	chConns  chan *KCPMuxConn
 	mutex    sync.Mutex
@@ -32,34 +40,45 @@ type packet struct {
 	addr   net.Addr
 }
 
-// TODO: Enlarge the limit
-const MaxConns = 128
+const MaxConns = 131072
 
-func NewKCPMux(conn net.PacketConn) *KCPMux {
+var (
+	flagKCPMode = flag.String("kcpMode", "normal", "")
+)
+
+func NewKCPMux(conn net.PacketConn, password string) (*KCPMux, error) {
 	mux := &KCPMux{}
 	mux.baseConn = conn
+	blake3.DeriveKey("okcptun", []byte(password), mux.key[:])
+	var err error
+	mux.cipher, err = aes.NewCipher(mux.key[:])
+	if err != nil {
+		return nil, err
+	}
 	mux.conns = make(map[uint32]*KCPMuxConn)
-	mux.chConns = make(chan *KCPMuxConn)
+	mux.chConns = make(chan *KCPMuxConn, 128)
 	go mux.readLoop()
-	return mux
+	return mux, nil
 }
 
-func (mux *KCPMux) Accept() (*kcp.UDPSession, error) {
+func (mux *KCPMux) Accept() (*kcp.UDPSession, io.Closer, error) {
 	baseConn := <-mux.chConns
 	conn, err := kcp.NewConn3(
 		baseConn.connId, baseConn.remoteAddr, nil, 0, 0, baseConn)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return conn, nil
+	configureKCPConn(conn)
+	return conn, baseConn, nil
 }
 
-func (mux *KCPMux) Dial(remoteAddr *net.UDPAddr) (*kcp.UDPSession, error) {
+func (mux *KCPMux) Dial(
+	remoteAddr *net.UDPAddr) (*kcp.UDPSession, io.Closer, error) {
 	mux.mutex.Lock()
 	defer mux.mutex.Unlock()
 
 	if len(mux.conns) >= MaxConns {
-		return nil, errors.New("too many connections")
+		return nil, nil, errors.New("too many connections")
 	}
 	baseConn := &KCPMuxConn{}
 	baseConn.mux = mux
@@ -70,14 +89,15 @@ func (mux *KCPMux) Dial(remoteAddr *net.UDPAddr) (*kcp.UDPSession, error) {
 			break
 		}
 	}
-	baseConn.chPackets = make(chan *packet)
+	baseConn.chPackets = make(chan *packet, 1024)
 	mux.conns[baseConn.connId] = baseConn
 
 	conn, err := kcp.NewConn3(baseConn.connId, remoteAddr, nil, 0, 0, baseConn)
 	if err != nil {
-		log.Fatal("KCPMux.Dial: NewConn failed: ", err)
+		return nil, nil, err
 	}
-	return conn, nil
+	configureKCPConn(conn)
+	return conn, baseConn, nil
 }
 
 func (mux *KCPMux) readLoop() {
@@ -87,11 +107,20 @@ func (mux *KCPMux) readLoop() {
 		if err != nil {
 			log.Fatal("KCPMux.readLoop: ReadFrom failed: ", err)
 		}
-		if size < 4 {
+		if size < 20 {
+			continue
+		}
+		stream := cipher.NewCTR(mux.cipher, buffer[size-16:size])
+		stream.XORKeyStream(buffer[:size-16], buffer[:size-16])
+		hasher, _ := blake3.NewKeyed(mux.key[:])
+		hasher.Write(buffer[:size-16])
+		digest := [16]byte{}
+		hasher.Digest().Read(digest[:])
+		if !bytes.Equal(buffer[size-16:size], digest[:]) {
 			continue
 		}
 		connId := binary.LittleEndian.Uint32(buffer[:4])
-		mux.dispatch(connId, buffer[:], addr)
+		mux.dispatch(connId, buffer[:size-16], addr)
 	}
 }
 
@@ -108,13 +137,20 @@ func (mux *KCPMux) dispatch(connId uint32, p []byte, addr net.Addr) {
 		conn = &KCPMuxConn{}
 		conn.mux = mux
 		conn.connId = connId
-		conn.chPackets = make(chan *packet)
+		conn.chPackets = make(chan *packet, 1024)
 		conn.remoteAddr = addr
+		select {
+		case mux.chConns <- conn:
+		default:
+			return
+		}
 		mux.conns[connId] = conn
-		mux.chConns <- conn
 	}
 	packet := &packet{p, addr}
-	conn.chPackets <- packet
+	select {
+	case conn.chPackets <- packet:
+	default:
+	}
 }
 
 func (conn *KCPMuxConn) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -124,11 +160,24 @@ func (conn *KCPMuxConn) ReadFrom(p []byte) (int, net.Addr, error) {
 }
 
 func (conn *KCPMuxConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	hasher, _ := blake3.NewKeyed(conn.mux.key[:])
+	hasher.Write(p)
+	p = append(p, make([]byte, 16)...)
+	hasher.Digest().Read(p[len(p)-16:])
+	stream := cipher.NewCTR(conn.mux.cipher, p[len(p)-16:])
+	stream.XORKeyStream(p[:len(p)-16], p[:len(p)-16])
 	return conn.mux.baseConn.WriteTo(p, addr)
 }
 
 func (conn *KCPMuxConn) Close() error {
-	log.Print("KCPMuxConn.Close not implemented")
+	mux := conn.mux
+	mux.mutex.Lock()
+	defer mux.mutex.Unlock()
+
+	if conn.closed {
+		return nil
+	}
+	delete(mux.conns, conn.connId)
 	conn.closed = true
 	return nil
 }
@@ -154,4 +203,23 @@ func (conn *KCPMuxConn) SetReadDeadline(t time.Time) error {
 func (conn *KCPMuxConn) SetWriteDeadline(t time.Time) error {
 	log.Print("KCPMuxConn.SetWriteDeadline not implemented")
 	return nil
+}
+
+func configureKCPConn(conn *kcp.UDPSession) {
+	conn.SetStreamMode(true)
+	conn.SetWriteDelay(false)
+	switch *flagKCPMode {
+	case "normal":
+		conn.SetNoDelay(0, 40, 2, 1)
+	case "fast":
+		conn.SetNoDelay(0, 30, 2, 1)
+	case "fast2":
+		conn.SetNoDelay(1, 20, 2, 1)
+	case "fast3":
+		conn.SetNoDelay(1, 10, 2, 1)
+	default:
+		log.Fatal("invalid kcpMode")
+	}
+	conn.SetWindowSize(1024, 1024)
+	conn.SetACKNoDelay(false)
 }

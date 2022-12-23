@@ -2,10 +2,14 @@ module okcptun
 
 go 1.17
 
-require github.com/xtaci/kcp-go/v5 v5.6.1
+require (
+	github.com/xtaci/kcp-go/v5 v5.6.1
+	github.com/zeebo/blake3 v0.2.3
+)
 
 require (
 	github.com/klauspost/cpuid v1.3.1 // indirect
+	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/klauspost/reedsolomon v1.9.9 // indirect
 	github.com/mmcloughlin/avo v0.0.0-20200803215136-443f81d77104 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
