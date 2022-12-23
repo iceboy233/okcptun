@@ -46,7 +46,8 @@ func main() {
 	}
 }
 
-func handle(clientConn net.Conn, mux *okcptun.KCPMux, remoteAddr *net.UDPAddr) {
+func handle(
+	clientConn *net.TCPConn, mux *okcptun.KCPMux, remoteAddr *net.UDPAddr) {
 	defer clientConn.Close()
 
 	log.Print("handle: new connection from ", clientConn.RemoteAddr())

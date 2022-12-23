@@ -2,18 +2,30 @@ package okcptun
 
 import (
 	"encoding/binary"
+	"flag"
 	"io"
+	"net"
+	"time"
+
+	"github.com/xtaci/kcp-go/v5"
 )
 
-func WrapFrames(dst io.Writer, src io.Reader) {
+var (
+	flagTimeout = flag.Int("timeout", 300, "")
+)
+
+func WrapFrames(dst *kcp.UDPSession, src *net.TCPConn) {
 	buffer := [65538]byte{}
 	for {
+		src.SetReadDeadline(computeDeadline())
 		size, err := src.Read(buffer[2:])
 		if err != nil {
+			dst.SetWriteDeadline(computeDeadline())
 			dst.Write([]byte{0, 0})
 			return
 		}
 		binary.BigEndian.PutUint16(buffer[0:2], uint16(size))
+		dst.SetWriteDeadline(computeDeadline())
 		_, err = dst.Write(buffer[:size+2])
 		if err != nil {
 			return
@@ -21,11 +33,12 @@ func WrapFrames(dst io.Writer, src io.Reader) {
 	}
 }
 
-func UnwrapFrames(dst io.WriteCloser, src io.Reader) {
+func UnwrapFrames(dst *net.TCPConn, src *kcp.UDPSession) {
 	defer dst.Close()
 
 	buffer := [65536]byte{}
 	for {
+		src.SetReadDeadline(computeDeadline())
 		_, err := io.ReadFull(src, buffer[:2])
 		if err != nil {
 			return
@@ -35,10 +48,12 @@ func UnwrapFrames(dst io.WriteCloser, src io.Reader) {
 			return
 		}
 		for frameSize > 0 {
+			src.SetReadDeadline(computeDeadline())
 			size, err := src.Read(buffer[:frameSize])
 			if err != nil {
 				return
 			}
+			dst.SetWriteDeadline(computeDeadline())
 			_, err = dst.Write(buffer[:size])
 			if err != nil {
 				return
@@ -46,4 +61,8 @@ func UnwrapFrames(dst io.WriteCloser, src io.Reader) {
 			frameSize -= size
 		}
 	}
+}
+
+func computeDeadline() time.Time {
+	return time.Now().Add(time.Second * time.Duration(*flagTimeout))
 }
