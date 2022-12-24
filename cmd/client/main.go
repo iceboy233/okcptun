@@ -33,10 +33,7 @@ func main() {
 	if err != nil {
 		log.Fatal("main: ListenUDP failed: ", err)
 	}
-	mux, err := okcptun.NewKCPMux(conn, *flagPassword, false)
-	if err != nil {
-		log.Fatal("main: NewCipher failed: ", err)
-	}
+	mux := okcptun.NewKCPMux(conn, *flagPassword, false)
 	for {
 		clientConn, err := listener.AcceptTCP()
 		if err != nil {
@@ -51,11 +48,7 @@ func handle(
 	defer clientConn.Close()
 
 	log.Print("handle: new connection from ", clientConn.RemoteAddr())
-	remoteConn, closer, err := mux.Dial(remoteAddr)
-	if err != nil {
-		log.Print("handle: Dial failed: ", err)
-		return
-	}
+	remoteConn, closer := mux.Dial(remoteAddr)
 	defer closer.Close()
 	defer remoteConn.Close()
 

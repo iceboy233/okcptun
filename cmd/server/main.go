@@ -32,15 +32,9 @@ func main() {
 		log.Fatal("main: ListenUDP failed: ", err)
 	}
 	log.Print("main: Listening on ", conn.LocalAddr())
-	mux, err := okcptun.NewKCPMux(conn, *flagPassword, true)
-	if err != nil {
-		log.Fatal("main: NewCipher failed: ", err)
-	}
+	mux := okcptun.NewKCPMux(conn, *flagPassword, true)
 	for {
-		clientConn, closer, err := mux.Accept()
-		if err != nil {
-			log.Fatal("main: Accept failed: ", err)
-		}
+		clientConn, closer := mux.Accept()
 		go handle(clientConn, closer, targetAddr)
 	}
 }

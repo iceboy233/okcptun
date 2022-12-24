@@ -6,7 +6,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 	"flag"
 	"io"
 	"log"
@@ -41,50 +40,36 @@ type packet struct {
 	addr   net.Addr
 }
 
-const MaxConns = 131072
-
 var (
 	flagFast          = flag.Int("fast", 2, "")
 	flagMinPacketSize = flag.Int("minPacketSize", 70, "")
 	flagMaxPacketSize = flag.Int("maxPacketSize", 1252, "")
 )
 
-func NewKCPMux(
-	conn net.PacketConn, password string, isServer bool) (*KCPMux, error) {
+func NewKCPMux(conn net.PacketConn, password string, isServer bool) *KCPMux {
 	mux := &KCPMux{}
 	mux.baseConn = conn
 	blake3.DeriveKey("okcptun", []byte(password), mux.key[:])
-	var err error
-	mux.cipher, err = aes.NewCipher(mux.key[:])
-	if err != nil {
-		return nil, err
-	}
+	mux.cipher, _ = aes.NewCipher(mux.key[:])
 	mux.isServer = isServer
 	mux.conns = make(map[uint32]*KCPMuxConn)
 	mux.chConns = make(chan *KCPMuxConn, 128)
 	go mux.readLoop()
-	return mux, nil
+	return mux
 }
 
-func (mux *KCPMux) Accept() (*kcp.UDPSession, io.Closer, error) {
+func (mux *KCPMux) Accept() (*kcp.UDPSession, io.Closer) {
 	baseConn := <-mux.chConns
-	conn, err := kcp.NewConn3(
+	conn, _ := kcp.NewConn3(
 		baseConn.connId, baseConn.remoteAddr, nil, 0, 0, baseConn)
-	if err != nil {
-		return nil, nil, err
-	}
 	configureKCPConn(conn)
-	return conn, baseConn, nil
+	return conn, baseConn
 }
 
-func (mux *KCPMux) Dial(
-	remoteAddr *net.UDPAddr) (*kcp.UDPSession, io.Closer, error) {
+func (mux *KCPMux) Dial(remoteAddr *net.UDPAddr) (*kcp.UDPSession, io.Closer) {
 	mux.mutex.Lock()
 	defer mux.mutex.Unlock()
 
-	if len(mux.conns) >= MaxConns {
-		return nil, nil, errors.New("too many connections")
-	}
 	baseConn := &KCPMuxConn{}
 	baseConn.mux = mux
 	for {
@@ -97,12 +82,9 @@ func (mux *KCPMux) Dial(
 	baseConn.chPackets = make(chan *packet, 1024)
 	mux.conns[baseConn.connId] = baseConn
 
-	conn, err := kcp.NewConn3(baseConn.connId, remoteAddr, nil, 0, 0, baseConn)
-	if err != nil {
-		return nil, nil, err
-	}
+	conn, _ := kcp.NewConn3(baseConn.connId, remoteAddr, nil, 0, 0, baseConn)
 	configureKCPConn(conn)
-	return conn, baseConn, nil
+	return conn, baseConn
 }
 
 func (mux *KCPMux) readLoop() {
@@ -138,10 +120,6 @@ func (mux *KCPMux) dispatch(connId uint32, p []byte, addr net.Addr) {
 		if !mux.isServer {
 			// TODO: Send RST.
 			log.Print("KCPMux.dispatch: unknown connection: ", connId)
-			return
-		}
-		if len(mux.conns) >= MaxConns {
-			log.Print("KCPMux.dispatch: too many connections")
 			return
 		}
 		conn = &KCPMuxConn{}
