@@ -44,7 +44,7 @@ type packet struct {
 const MaxConns = 131072
 
 var (
-	flagKCPMode = flag.String("kcpMode", "normal", "")
+	flagFast = flag.Int("fast", 2, "")
 )
 
 func NewKCPMux(
@@ -216,17 +216,17 @@ func (conn *KCPMuxConn) SetWriteDeadline(t time.Time) error {
 func configureKCPConn(conn *kcp.UDPSession) {
 	conn.SetStreamMode(true)
 	conn.SetWriteDelay(false)
-	switch *flagKCPMode {
-	case "normal":
+	switch *flagFast {
+	case 0:
 		conn.SetNoDelay(0, 40, 2, 1)
-	case "fast":
+	case 1:
 		conn.SetNoDelay(0, 30, 2, 1)
-	case "fast2":
+	case 2:
 		conn.SetNoDelay(1, 20, 2, 1)
-	case "fast3":
+	case 3:
 		conn.SetNoDelay(1, 10, 2, 1)
 	default:
-		log.Fatal("invalid kcpMode")
+		log.Fatal("invalid fast: ", *flagFast)
 	}
 	conn.SetWindowSize(1024, 1024)
 	conn.SetACKNoDelay(false)
