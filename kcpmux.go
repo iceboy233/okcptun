@@ -22,6 +22,7 @@ type KCPMux struct {
 	baseConn net.PacketConn
 	key      [32]byte
 	cipher   cipher.Block
+	isServer bool
 	conns    map[uint32]*KCPMuxConn
 	chConns  chan *KCPMuxConn
 	mutex    sync.Mutex
@@ -46,7 +47,8 @@ var (
 	flagKCPMode = flag.String("kcpMode", "normal", "")
 )
 
-func NewKCPMux(conn net.PacketConn, password string) (*KCPMux, error) {
+func NewKCPMux(
+	conn net.PacketConn, password string, isServer bool) (*KCPMux, error) {
 	mux := &KCPMux{}
 	mux.baseConn = conn
 	blake3.DeriveKey("okcptun", []byte(password), mux.key[:])
@@ -55,6 +57,7 @@ func NewKCPMux(conn net.PacketConn, password string) (*KCPMux, error) {
 	if err != nil {
 		return nil, err
 	}
+	mux.isServer = isServer
 	mux.conns = make(map[uint32]*KCPMuxConn)
 	mux.chConns = make(chan *KCPMuxConn, 128)
 	go mux.readLoop()
@@ -130,6 +133,11 @@ func (mux *KCPMux) dispatch(connId uint32, p []byte, addr net.Addr) {
 
 	conn, ok := mux.conns[connId]
 	if !ok {
+		if !mux.isServer {
+			// TODO: Send RST.
+			log.Print("KCPMux.dispatch: unknown connection: ", connId)
+			return
+		}
 		if len(mux.conns) >= MaxConns {
 			log.Print("KCPMux.dispatch: too many connections")
 			return

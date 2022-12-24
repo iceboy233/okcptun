@@ -32,7 +32,7 @@ func main() {
 		log.Fatal("main: ListenUDP failed: ", err)
 	}
 	log.Print("main: Listening on ", conn.LocalAddr())
-	mux, err := okcptun.NewKCPMux(conn, *flagPassword)
+	mux, err := okcptun.NewKCPMux(conn, *flagPassword, true)
 	if err != nil {
 		log.Fatal("main: NewCipher failed: ", err)
 	}
