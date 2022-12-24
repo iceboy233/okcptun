@@ -15,7 +15,7 @@ var (
 )
 
 func WrapFrames(dst *kcp.UDPSession, src *net.TCPConn) {
-	buffer := [65538]byte{}
+	buffer := [65536]byte{}
 	for {
 		src.SetReadDeadline(computeDeadline())
 		size, err := src.Read(buffer[2:])
