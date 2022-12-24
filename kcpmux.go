@@ -154,6 +154,9 @@ func (mux *KCPMux) dispatch(connId uint32, p []byte, addr net.Addr) {
 		}
 		mux.conns[connId] = conn
 	}
+	if conn.closed {
+		return
+	}
 	packet := &packet{p, addr}
 	select {
 	case conn.chPackets <- packet:
@@ -162,12 +165,21 @@ func (mux *KCPMux) dispatch(connId uint32, p []byte, addr net.Addr) {
 }
 
 func (conn *KCPMuxConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	if conn.closed {
+		return 0, nil, net.ErrClosed
+	}
 	packet := <-conn.chPackets
+	if packet == nil {
+		return 0, nil, net.ErrClosed
+	}
 	size := copy(p, packet.buffer)
 	return size, packet.addr, nil
 }
 
 func (conn *KCPMuxConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if conn.closed {
+		return 0, net.ErrClosed
+	}
 	hasher, _ := blake3.NewKeyed(conn.mux.key[:])
 	hasher.Write(p)
 	p = append(p, make([]byte, 16)...)
@@ -178,15 +190,22 @@ func (conn *KCPMuxConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 }
 
 func (conn *KCPMuxConn) Close() error {
-	mux := conn.mux
-	mux.mutex.Lock()
-	defer mux.mutex.Unlock()
-
 	if conn.closed {
 		return nil
 	}
-	delete(mux.conns, conn.connId)
 	conn.closed = true
+	select {
+	case conn.chPackets <- nil:
+	default:
+	}
+	go func() {
+		time.Sleep(time.Second * 30)
+
+		mux := conn.mux
+		mux.mutex.Lock()
+		defer mux.mutex.Unlock()
+		delete(mux.conns, conn.connId)
+	}()
 	return nil
 }
 
