@@ -44,7 +44,9 @@ type packet struct {
 const MaxConns = 131072
 
 var (
-	flagFast = flag.Int("fast", 2, "")
+	flagFast          = flag.Int("fast", 2, "")
+	flagMinPacketSize = flag.Int("minPacketSize", 70, "")
+	flagMaxPacketSize = flag.Int("maxPacketSize", 1252, "")
 )
 
 func NewKCPMux(
@@ -180,6 +182,9 @@ func (conn *KCPMuxConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if conn.closed {
 		return 0, net.ErrClosed
 	}
+	if len(p)+16 < *flagMinPacketSize {
+		p = append(p, make([]byte, *flagMinPacketSize-len(p)-16)...)
+	}
 	hasher, _ := blake3.NewKeyed(conn.mux.key[:])
 	hasher.Write(p)
 	p = append(p, make([]byte, 16)...)
@@ -249,4 +254,5 @@ func configureKCPConn(conn *kcp.UDPSession) {
 	}
 	conn.SetWindowSize(1024, 1024)
 	conn.SetACKNoDelay(false)
+	conn.SetMtu(*flagMaxPacketSize - 16)
 }
