@@ -146,11 +146,11 @@ func (mux *KCPMux) dispatch(connId uint32, p []byte, addr net.Addr) {
 
 func (conn *KCPMuxConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	if conn.closed {
-		return 0, nil, net.ErrClosed
+		return 0, nil, io.EOF
 	}
 	packet := <-conn.chPackets
 	if packet == nil {
-		return 0, nil, net.ErrClosed
+		return 0, nil, io.EOF
 	}
 	size := copy(p, packet.buffer)
 	return size, packet.addr, nil
@@ -158,7 +158,7 @@ func (conn *KCPMuxConn) ReadFrom(p []byte) (int, net.Addr, error) {
 
 func (conn *KCPMuxConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if conn.closed {
-		return 0, net.ErrClosed
+		return 0, io.EOF
 	}
 	if len(p)+16 < *flagMinPacketSize {
 		p = append(p, make([]byte, *flagMinPacketSize-len(p)-16)...)
