@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"flag"
+	"hash"
 	"io"
 	"log"
 	"net"
@@ -14,7 +15,8 @@ import (
 	"time"
 
 	"github.com/xtaci/kcp-go/v5"
-	"github.com/zeebo/blake3"
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/hkdf"
 )
 
 type KCPMux struct {
@@ -54,7 +56,10 @@ var (
 func NewKCPMux(conn net.PacketConn, password string, isServer bool) *KCPMux {
 	mux := &KCPMux{}
 	mux.baseConn = conn
-	blake3.DeriveKey("okcptun", []byte(password), mux.key[:])
+	hkdf := hkdf.New(
+		func() hash.Hash { hash, _ := blake2b.New256(nil); return hash },
+		[]byte(password), []byte("okcptun"), nil)
+	hkdf.Read(mux.key[:])
 	mux.cipher, _ = aes.NewCipher(mux.key[:])
 	mux.isServer = isServer
 	mux.conns = make(map[uint32]*KCPMuxConn)
@@ -104,11 +109,10 @@ func (mux *KCPMux) readLoop() {
 		}
 		stream := cipher.NewCTR(mux.cipher, buffer[size-16:size])
 		stream.XORKeyStream(buffer[:size-16], buffer[:size-16])
-		hasher, _ := blake3.NewKeyed(mux.key[:])
-		hasher.Write(buffer[:size-16])
-		digest := [16]byte{}
-		hasher.Digest().Read(digest[:])
-		if !bytes.Equal(buffer[size-16:size], digest[:]) {
+		hash, _ := blake2b.New(16, mux.key[:])
+		hash.Write(buffer[:size-16])
+		sum := hash.Sum(nil)
+		if !bytes.Equal(buffer[size-16:size], sum) {
 			continue
 		}
 		connId := binary.LittleEndian.Uint32(buffer[:4])
@@ -168,10 +172,9 @@ func (conn *KCPMuxConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if len(p)+16 < *flagMinPacketSize {
 		p = append(p, make([]byte, *flagMinPacketSize-len(p)-16)...)
 	}
-	hasher, _ := blake3.NewKeyed(conn.mux.key[:])
-	hasher.Write(p)
-	p = append(p, make([]byte, 16)...)
-	hasher.Digest().Read(p[len(p)-16:])
+	hash, _ := blake2b.New(16, conn.mux.key[:])
+	hash.Write(p)
+	p = hash.Sum(p)
 	stream := cipher.NewCTR(conn.mux.cipher, p[len(p)-16:])
 	stream.XORKeyStream(p[:len(p)-16], p[:len(p)-16])
 	return conn.mux.baseConn.WriteTo(p, addr)

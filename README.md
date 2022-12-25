@@ -5,7 +5,7 @@ Opinionated KCP Tunnel.
 The main difference is that `okcptun` multiplexes all tunneled connections onto
 a single UDP connection at packet level, that hides some of the connection
 characteristics without introducing head of line blocking. It also uses
-AES-256-CTR with BLAKE3 SIV to encrypt the packets.
+AES-256-CTR with BLAKE2b SIV to encrypt the packets.
 
 ## Usage
 
