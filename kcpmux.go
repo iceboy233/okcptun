@@ -42,8 +42,13 @@ type packet struct {
 
 var (
 	flagFast          = flag.Int("fast", 2, "")
-	flagMinPacketSize = flag.Int("minPacketSize", 70, "")
+	flagMinPacketSize = flag.Int("minPacketSize", 64, "")
 	flagMaxPacketSize = flag.Int("maxPacketSize", 1252, "")
+	flagStreamMode    = flag.Bool("streamMode", true, "")
+	flagWriteDelay    = flag.Bool("writeDelay", false, "")
+	flagSendWindow    = flag.Int("sendWindow", 1024, "")
+	flagReceiveWindow = flag.Int("receiveWindow", 1024, "")
+	flagACKNoDelay    = flag.Bool("ackNoDelay", false, "")
 )
 
 func NewKCPMux(conn net.PacketConn, password string, isServer bool) *KCPMux {
@@ -216,8 +221,8 @@ func (conn *KCPMuxConn) SetWriteDeadline(t time.Time) error {
 }
 
 func configureKCPConn(conn *kcp.UDPSession) {
-	conn.SetStreamMode(true)
-	conn.SetWriteDelay(false)
+	conn.SetStreamMode(*flagStreamMode)
+	conn.SetWriteDelay(*flagWriteDelay)
 	switch *flagFast {
 	case 0:
 		conn.SetNoDelay(0, 40, 2, 1)
@@ -230,7 +235,7 @@ func configureKCPConn(conn *kcp.UDPSession) {
 	default:
 		log.Fatal("invalid fast: ", *flagFast)
 	}
-	conn.SetWindowSize(1024, 1024)
-	conn.SetACKNoDelay(false)
+	conn.SetWindowSize(*flagSendWindow, *flagReceiveWindow)
+	conn.SetACKNoDelay(*flagACKNoDelay)
 	conn.SetMtu(*flagMaxPacketSize - 16)
 }

@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	flagTimeout = flag.Int("timeout", 30, "")
+	flagTimeout = flag.Int("timeout", 300, "")
 )
 
 func WrapFrames(dst *kcp.UDPSession, src *net.TCPConn) {
