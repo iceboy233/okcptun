@@ -11,7 +11,8 @@ import (
 )
 
 var (
-	flagTimeout = flag.Int("timeout", 300, "")
+	flagTimeout   = flag.Int("timeout", 300, "")
+	flagCloseWait = flag.Int("closeWait", 30, "")
 )
 
 func WrapFrames(dst *kcp.UDPSession, src *net.TCPConn) {
@@ -22,6 +23,7 @@ func WrapFrames(dst *kcp.UDPSession, src *net.TCPConn) {
 		if err != nil {
 			dst.SetWriteDeadline(computeDeadline())
 			dst.Write([]byte{0, 0})
+			time.Sleep(time.Second * time.Duration(*flagCloseWait))
 			return
 		}
 		binary.BigEndian.PutUint16(buffer[0:2], uint16(size))

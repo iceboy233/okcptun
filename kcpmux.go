@@ -32,7 +32,7 @@ type KCPMux struct {
 type KCPMuxConn struct {
 	mux        *KCPMux
 	connId     uint32
-	closed     bool
+	closeOnce  sync.Once
 	chPackets  chan *packet
 	remoteAddr net.Addr
 }
@@ -143,9 +143,6 @@ func (mux *KCPMux) dispatch(connId uint32, p []byte, addr net.Addr) {
 		}
 		mux.conns[connId] = conn
 	}
-	if conn.closed {
-		return
-	}
 	packet := &packet{p, addr}
 	select {
 	case conn.chPackets <- packet:
@@ -154,9 +151,6 @@ func (mux *KCPMux) dispatch(connId uint32, p []byte, addr net.Addr) {
 }
 
 func (conn *KCPMuxConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	if conn.closed {
-		return 0, nil, io.EOF
-	}
 	packet := <-conn.chPackets
 	if packet == nil {
 		return 0, nil, io.EOF
@@ -166,9 +160,6 @@ func (conn *KCPMuxConn) ReadFrom(p []byte) (int, net.Addr, error) {
 }
 
 func (conn *KCPMuxConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	if conn.closed {
-		return 0, io.EOF
-	}
 	if len(p)+16 < *flagMinPacketSize {
 		p = append(p, make([]byte, *flagMinPacketSize-len(p)-16)...)
 	}
@@ -181,22 +172,12 @@ func (conn *KCPMuxConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 }
 
 func (conn *KCPMuxConn) Close() error {
-	if conn.closed {
-		return nil
-	}
-	conn.closed = true
-	select {
-	case conn.chPackets <- nil:
-	default:
-	}
-	go func() {
-		time.Sleep(time.Second * 30)
-
-		mux := conn.mux
-		mux.mutex.Lock()
-		defer mux.mutex.Unlock()
-		delete(mux.conns, conn.connId)
-	}()
+	conn.closeOnce.Do(func() {
+		conn.mux.mutex.Lock()
+		delete(conn.mux.conns, conn.connId)
+		conn.mux.mutex.Unlock()
+		close(conn.chPackets)
+	})
 	return nil
 }
 
